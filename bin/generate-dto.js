@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 const fs = require("fs");
 const path = require("path");
 
@@ -23,25 +24,41 @@ if (!fs.existsSync(dtoDir)) {
 
 const schemaContent = fs.readFileSync(schemaPath, "utf8");
 
-const propRegex = /@Prop\(\{[^}]*type:\s*([A-Za-z\[\].]+)[^}]*\}\)\s*\n\s*(\w+):\s*[\w\[\]]+;/g;
+const propRegex = /@Prop\([^)]*\)\s*\n\s*(\w+):\s*([^;]+);/g;
 
 const fields = [];
 let match;
 
 while ((match = propRegex.exec(schemaContent)) !== null) {
-  let [, type, name] = match;
-  type = type.toLowerCase();
+  const [, name, rawType] = match;
 
   let tsType = "string";
-  if (["number"].includes(type)) tsType = "number";
-  if (["boolean"].includes(type)) tsType = "boolean";
-  if (["date"].includes(type)) tsType = "Date";
-  if (type.includes("string[]") || type.includes("[string]")) tsType = "string[]";
+  let validators = ["@IsString()"];
 
-  fields.push({ name, type: tsType });
+  if (/number/i.test(rawType)) {
+    tsType = "number";
+    validators = ["@IsNumber()"];
+  } else if (/boolean/i.test(rawType)) {
+    tsType = "boolean";
+    validators = ["@IsBoolean()"];
+  } else if (/date/i.test(rawType)) {
+    tsType = "Date";
+    validators = ["@IsDateString()"];
+  } else if (/Types\.ObjectId\[\]/.test(rawType)) {
+    tsType = "string[]";
+    validators = ["@IsArray()", "@IsMongoId({ each: true })"];
+  } else if (/Types\.ObjectId/.test(rawType)) {
+    tsType = "string";
+    validators = ["@IsMongoId()"];
+  } else if (/string\[\]/i.test(rawType)) {
+    tsType = "string[]";
+    validators = ["@IsArray()", "@IsString({ each: true })"];
+  }
+
+  fields.push({ name, type: tsType, validators });
 }
 
-function genApiProperty(name, type) {
+function genApiProperty(name, type, validators) {
   const swaggerType =
     type === "Date"
       ? "String"
@@ -53,18 +70,35 @@ function genApiProperty(name, type) {
       ? "[String]"
       : "String";
 
-  return `  @ApiProperty({ type: ${swaggerType} })\n  ${name}: ${type};\n`;
+  return `  @ApiProperty({ type: ${swaggerType} })\n  ${validators.join("\n  ")}\n  ${name}: ${type};\n`;
+}
+
+function genApiPropertyOptional(name, type, validators) {
+  const swaggerType =
+    type === "Date"
+      ? "String"
+      : type === "number"
+      ? "Number"
+      : type === "boolean"
+      ? "Boolean"
+      : type === "string[]"
+      ? "[String]"
+      : "String";
+
+  return `  @ApiPropertyOptional({ type: ${swaggerType} })\n  @IsOptional()\n  ${validators.join("\n  ")}\n  ${name}?: ${type};\n`;
 }
 
 function capitalize(s) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+const importsValidators = `import { IsString, IsNumber, IsBoolean, IsOptional, IsArray, IsDateString, IsMongoId } from 'class-validator';`;
+
 const createDto = `import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNumber, IsBoolean, IsOptional } from 'class-validator';
+${importsValidators}
 
 export class Create${capitalize(moduleName)}Dto {
-${fields.map(f => genApiProperty(f.name, f.type)).join("\n")}
+${fields.map(f => genApiProperty(f.name, f.type, f.validators)).join("\n")}
 }
 `;
 
@@ -77,14 +111,28 @@ export class Update${capitalize(moduleName)}Dto extends PartialType(Create${capi
 const responseDto = `import { ApiProperty } from '@nestjs/swagger';
 
 export class ${capitalize(moduleName)}ResponseDto {
-${fields.map(f => genApiProperty(f.name, f.type)).join("\n")}
+${fields.map(f => {
+  const swaggerType =
+    f.type === "Date"
+      ? "String"
+      : f.type === "number"
+      ? "Number"
+      : f.type === "boolean"
+      ? "Boolean"
+      : f.type === "string[]"
+      ? "[String]"
+      : "String";
+  return `  @ApiProperty({ type: ${swaggerType} })\n  ${f.name}: ${f.type};\n`;
+}).join("\n")}
 }
 `;
 
 const filterDto = `import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsNumber } from 'class-validator';
+${importsValidators}
 
 export class Filter${capitalize(moduleName)}Dto {
+${fields.map(f => genApiPropertyOptional(f.name, f.type, f.validators)).join("\n")}
+
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()
   @IsNumber()
