@@ -1,0 +1,11 @@
+{
+  "name": "@crdsyntax/mondb-nest-dto",
+  "version": "1.0.0",
+  "description": "a dto generator for nestjs, class-validator, swagger",
+  "license": "ISC",
+  "author": "crdsyntax",
+  "private": false,
+  "bin": {
+    "generate:dto": "./bin/generate-dto.js"
+  }
+}
